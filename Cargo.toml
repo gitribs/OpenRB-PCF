@@ -1,0 +1,17 @@
+[package]
+name = "orb-pcf"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+description = "Stereo wrapper around orb-engine's Pattern Controlled Filter, for the OpenRB PCF plugin"
+
+[lib]
+name = "orb_pcf"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+orb-engine = { path = "third_party/openrb-338/crates/orb-engine" }
+
+[profile.release]
+panic = "abort"
