@@ -27,7 +27,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
-find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
+find_program(CARGO_EXECUTABLE cargo HINTS
+    "$ENV{HOME}/.cargo/bin"
+    "$ENV{USERPROFILE}/.cargo/bin"
+)
 if(NOT CARGO_EXECUTABLE)
     message(FATAL_ERROR "cargo not found; install Rust from https://rustup.rs")
 endif()
@@ -102,8 +105,27 @@ endif()
 add_custom_target(orb_pcf_rust DEPENDS "${ORB_PCF_STATICLIB}")
 
 add_library(orb_pcf_lib STATIC IMPORTED GLOBAL)
-set_target_properties(orb_pcf_lib PROPERTIES IMPORTED_LOCATION "${ORB_PCF_STATICLIB}")
+set_target_properties(orb_pcf_lib PROPERTIES
+    IMPORTED_LOCATION "${ORB_PCF_STATICLIB}"
+    IMPORTED_LOCATION_DEBUG "${ORB_PCF_STATICLIB}"
+    IMPORTED_LOCATION_RELEASE "${ORB_PCF_STATICLIB}"
+    IMPORTED_LOCATION_RELWITHDEBINFO "${ORB_PCF_STATICLIB}"
+    IMPORTED_LOCATION_MINSIZEREL "${ORB_PCF_STATICLIB}"
+)
 add_dependencies(orb_pcf_lib orb_pcf_rust)
+
+# rustc --print native-static-libs for x86_64-pc-windows-msvc. MSVC does not
+# pull these in on its own, so the VST3 link fails with unresolved __imp_* symbols.
+if(WIN32)
+    set_property(TARGET orb_pcf_lib PROPERTY INTERFACE_LINK_LIBRARIES
+        ntdll
+        userenv
+        ws2_32
+        bcrypt
+        advapi32
+        synchronization
+    )
+endif()
 
 set(ORB_PCF_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/output")
 file(MAKE_DIRECTORY
@@ -154,9 +176,15 @@ target_compile_definitions(OpenRbPcf
         JUCE_REPORT_APP_USAGE=0
 )
 
+if(MSVC)
+    set(ORB_PCF_LINK_LIB "$<LINK_LIBRARY:WHOLE_ARCHIVE,orb_pcf_lib>")
+else()
+    set(ORB_PCF_LINK_LIB orb_pcf_lib)
+endif()
+
 target_link_libraries(OpenRbPcf
     PRIVATE
-        orb_pcf_lib
+        ${ORB_PCF_LINK_LIB}
         juce::juce_audio_utils
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
