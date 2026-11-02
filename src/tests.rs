@@ -19,6 +19,20 @@ fn apply(p: &mut Pcf, params: Params) {
     p.set_param(pcf::WAVE as u8, params.pattern.min(PATTERN_MAX));
     p.set_param(pcf::MODE as u8, params.mode);
     p.set_param(pcf::ENABLED as u8, 1);
+    p.set_pattern_override(seq_override(&params));
+}
+
+fn seq_params(length: u8, resolution: u8, steps: [u8; 32]) -> Params {
+    Params {
+        seq_enable: 1,
+        seq_length: length,
+        seq_resolution: resolution,
+        seq_steps: steps,
+        amount: 40,
+        frequency: 0,
+        pattern: 0,
+        ..Params::default()
+    }
 }
 
 fn playing(ppq: f64) -> Playhead {
@@ -282,4 +296,96 @@ fn pattern_is_clamped_to_the_panel_range() {
     let mut r = [0.0f32; BLOCK];
     p.process(&mut l, &mut r, params, playing(0.0));
     assert_eq!(p.left().live[WAVE], PATTERN_MAX);
+}
+
+#[test]
+fn seq_on_ignores_the_factory_wave() {
+    let mut steps = [0u8; 32];
+    steps[1] = 120;
+    let params = seq_params(16, 16, steps);
+    let mut p = PcfStereo::new();
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p.process(&mut l, &mut r, params, playing(0.0));
+    assert_eq!(p.left().step, 0);
+    assert!(
+        p.left().env < 1.0,
+        "custom rest at step 0 must not open, env {}",
+        p.left().env
+    );
+
+    let inc = DEFAULT_TEMPO_MILLI as f64 * TEMPO_STEP;
+    let step1_ppq = (48.0 - inc) / PPQ as f64;
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p.process(&mut l, &mut r, params, playing(step1_ppq));
+    assert_eq!(p.left().step, 1);
+    assert!(
+        p.left().env > 1.0,
+        "custom hit at step 1 must open, env {}",
+        p.left().env
+    );
+}
+
+#[test]
+fn seq_off_keeps_the_factory_wave() {
+    let mut steps = [0u8; 32];
+    steps[0] = 120;
+    let mut params = seq_params(16, 16, steps);
+    params.seq_enable = 0;
+    let mut p = PcfStereo::new();
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p.process(&mut l, &mut r, params, playing(0.0));
+    assert_eq!(p.left().step, 0);
+    assert!(
+        p.left().env > 1.0,
+        "wave 0 step 0 opens when seq is off, env {}",
+        p.left().env
+    );
+}
+
+#[test]
+fn seq_resolution_changes_step_rate() {
+    let mut steps = [0u8; 32];
+    steps[1] = 120;
+    let inc = DEFAULT_TEMPO_MILLI as f64 * TEMPO_STEP;
+    // tick 24 is step 1 at 32nds (tick/24) and still step 0 at 16ths (tick/48).
+    let ppq = (24.0 - inc) / PPQ as f64;
+
+    let mut p32 = PcfStereo::new();
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p32.process(&mut l, &mut r, seq_params(16, 32, steps), playing(ppq));
+    assert_eq!(p32.left().step, 1);
+
+    let mut p16 = PcfStereo::new();
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p16.process(&mut l, &mut r, seq_params(16, 16, steps), playing(ppq));
+    assert_eq!(p16.left().step, 0);
+}
+
+#[test]
+fn seq_length_one_retriggers() {
+    let mut steps = [0u8; 32];
+    steps[0] = 120;
+    let params = seq_params(1, 16, steps);
+    let mut p = PcfStereo::new();
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p.process(&mut l, &mut r, params, playing(0.0));
+    let first = p.left().env;
+    assert!(first > 1.0);
+
+    let inc = DEFAULT_TEMPO_MILLI as f64 * TEMPO_STEP;
+    let next_ppq = (48.0 - inc) / PPQ as f64;
+    let mut l = [0.0f32; BLOCK];
+    let mut r = [0.0f32; BLOCK];
+    p.process(&mut l, &mut r, params, playing(next_ppq));
+    assert!(
+        p.left().env > first * 0.5,
+        "length 1 must retrigger on the next 16th, {} vs first {first}",
+        p.left().env
+    );
 }

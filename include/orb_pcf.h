@@ -17,6 +17,10 @@ typedef struct OrbPcfParams {
     uint8_t pattern;
     uint8_t mode;
     uint8_t bypass;
+    uint8_t seq_enable;
+    uint8_t seq_length;
+    uint8_t seq_resolution;
+    uint8_t seq_steps[32];
 } OrbPcfParams;
 
 typedef struct OrbPcfPlayhead {

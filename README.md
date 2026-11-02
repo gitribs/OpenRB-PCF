@@ -24,7 +24,9 @@ third_party/openrb-338/crates/rbs           # copied song-format crate the engin
 
 ## Build
 
-Rust 1.99.1 (see `rust-toolchain.toml`) and CMake 3.24+.
+Rust 1.99.1 (see `rust-toolchain.toml`) and CMake 3.24+. macOS builds are universal
+(`arm64` + `x86_64`) so native Ableton 12 on Apple Silicon can load the VST3. The first
+build will ask `rustup` for `aarch64-apple-darwin` if that target is missing.
 
 ```sh
 cargo test

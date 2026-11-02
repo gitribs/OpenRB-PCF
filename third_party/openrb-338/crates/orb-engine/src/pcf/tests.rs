@@ -307,3 +307,83 @@ fn messages_and_controllers() {
     p.set_song_mode(false);
     assert_eq!(p.live, block);
 }
+
+fn override_steps(hit: usize, vel: u8) -> [u8; 32] {
+    let mut steps = [0u8; 32];
+    steps[hit] = vel;
+    steps
+}
+
+#[test]
+fn a_pattern_override_replaces_the_wave() {
+    let t = Tables::new();
+    let mut p = Pcf::new();
+    p.live[WAVE] = 0;
+    p.live[AMOUNT] = 40;
+    p.live[FREQUENCY] = 0;
+    p.set_pattern_override(Some(PatternOverride {
+        length: 16,
+        resolution: 16,
+        steps: override_steps(1, 120),
+    }));
+    let mut bus = [0.0; BLOCK];
+    p.process(&mut bus, &ctx(&t, 0));
+    assert_eq!(p.step, 0);
+    assert!(p.env < 1.0, "override rest at step 0, env {}", p.env);
+
+    p.process(&mut bus, &ctx(&t, 48));
+    assert_eq!(p.step, 1);
+    assert!(p.env > 1.0, "override hit at step 1, env {}", p.env);
+}
+
+#[test]
+fn override_length_one_retriggers_each_grid_pulse() {
+    let t = Tables::new();
+    let mut p = Pcf::new();
+    p.live[AMOUNT] = 40;
+    p.live[FREQUENCY] = 0;
+    p.set_pattern_override(Some(PatternOverride {
+        length: 1,
+        resolution: 16,
+        steps: override_steps(0, 120),
+    }));
+    let mut bus = [0.0; BLOCK];
+    p.process(&mut bus, &ctx(&t, 0));
+    let first = p.env;
+    assert!(first > 1.0, "first pulse, env {first}");
+
+    p.process(&mut bus, &ctx(&t, 47));
+    assert!(
+        p.env < first,
+        "same 16th must decay, {} vs {first}",
+        p.env
+    );
+
+    p.process(&mut bus, &ctx(&t, 48));
+    assert!(
+        p.env > first * 0.5,
+        "next 16th must retrigger, {} vs first {first}",
+        p.env
+    );
+}
+
+#[test]
+fn clearing_the_override_returns_to_the_wave() {
+    let t = Tables::new();
+    let mut p = Pcf::new();
+    p.live[WAVE] = 0;
+    p.live[AMOUNT] = 40;
+    p.live[FREQUENCY] = 0;
+    p.set_pattern_override(Some(PatternOverride {
+        length: 16,
+        resolution: 16,
+        steps: [0; 32],
+    }));
+    let mut bus = [0.0; BLOCK];
+    p.process(&mut bus, &ctx(&t, 0));
+    assert!(p.env < 1.0);
+    p.set_pattern_override(None);
+    p.step = -1;
+    p.process(&mut bus, &ctx(&t, 0));
+    assert!(p.env > 1.0, "wave 0 step 0 should open, env {}", p.env);
+}

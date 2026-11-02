@@ -110,6 +110,30 @@ pub fn velocity(wave: u8, step: i32) -> u8 {
         .unwrap_or(0)
 }
 
+/// A RAM pattern used instead of the ROM wave tables. Length 0 is clamped to 1 so the
+/// override cannot raise [`Fault::PcfZeroLength`]. Resolution is 8, 16 or 32; anything else
+/// becomes 16, the grid of most factory waves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatternOverride {
+    pub length: u16,
+    pub resolution: u16,
+    pub steps: [u8; 32],
+}
+
+impl PatternOverride {
+    /// Length 1..=32 and resolution 8, 16 or 32.
+    pub fn clamped(self) -> Self {
+        Self {
+            length: self.length.clamp(1, 32),
+            resolution: match self.resolution {
+                8 | 32 => self.resolution,
+                _ => 16,
+            },
+            steps: self.steps,
+        }
+    }
+}
+
 /// The step quotient of 0x1001677B..0x100167AE: the tick divided (signed `idiv`) by the ticks
 /// per step of the resolution (24 for 32, 48 for 16, 96 for 8 steps per bar), `None` for any
 /// other resolution, where the original leaves the stack slot (`var_1C`) as it was.
@@ -266,6 +290,9 @@ pub struct Pcf {
     pub quotient: i32,
     /// Set by a block that divided by zero, read and cleared by [`InsertEffect::faulted`].
     fault: Option<Fault>,
+    /// When set, [`Pcf::control`] reads length, resolution and velocities from here instead of
+    /// the ROM wave indexed by [`WAVE`].
+    pattern_override: Option<PatternOverride>,
 }
 
 impl Default for Pcf {
@@ -295,6 +322,30 @@ impl Pcf {
             peak: 0.0,
             quotient: 0,
             fault: None,
+            pattern_override: None,
+        }
+    }
+
+    /// Use `src` as the step table, or `None` to return to the ROM wave.
+    pub fn set_pattern_override(&mut self, src: Option<PatternOverride>) {
+        self.pattern_override = src.map(PatternOverride::clamped);
+    }
+
+    fn current_pattern(&self) -> (u16, u16) {
+        self.pattern_override
+            .map(|o| (o.length, o.resolution))
+            .unwrap_or_else(|| pattern(self.live[WAVE]))
+    }
+
+    fn current_velocity(&self, step: i32) -> u8 {
+        if let Some(o) = self.pattern_override {
+            usize::try_from(step)
+                .ok()
+                .and_then(|i| o.steps.get(i))
+                .copied()
+                .unwrap_or(0)
+        } else {
+            velocity(self.live[WAVE], step)
         }
     }
 
@@ -314,7 +365,7 @@ impl Pcf {
     /// faults; what was stored before it, the counter, the peak and `+0x84`, stands).
     fn control(&mut self, ctx: &BlockContext) -> Option<Envelope> {
         let p = self.live;
-        let (len, res) = pattern(p[WAVE]);
+        let (len, res) = self.current_pattern();
         if let Some(q) = quotient(ctx.tick, res) {
             self.quotient = q;
         } else if let Some(w) = ctx.stack_word {
@@ -333,19 +384,26 @@ impl Pcf {
         if len == 0 {
             return None;
         }
-        let step = self.quotient % len as i32;
+        let index = self.quotient % len as i32;
+        // Length 1 never changes index (`q % 1 == 0`). An override treats a new quotient as a
+        // new step so a single pad can retrigger every grid pulse.
+        let step_id = if self.pattern_override.is_some() && len == 1 {
+            self.quotient
+        } else {
+            index
+        };
         self.smooth[0] = st(s);
         self.base = st(s);
         let slow = |r: f32| (r as f64, ONE - r as f64);
         let mut e = self.trigger as f64;
         let (mut keep, mut take) = slow(self.attack);
-        if step != self.step {
+        if step_id != self.step {
             // 0x10016845: a new step sets the decay, and a non-zero velocity triggers
-            self.step = step;
+            self.step = step_id;
             // `decay >> 3` indexes 16 entries; the load accepts only 0..127 for the byte and a
             // larger one would read past `dword_100332D0`, so it is clamped
             self.decay = PCF_DECAY[(p[DECAY] >> 3).min(15) as usize];
-            let v = velocity(p[WAVE], step);
+            let v = self.current_velocity(index);
             if v != 0 {
                 e = trigger_level(v, p[AMOUNT], self.base);
                 if v & 1 != 0 {
@@ -415,7 +473,7 @@ impl InsertEffect for Pcf {
     /// The quotient when the block stored one (enabled, resolution 8, 16 or 32: 0x10016792,
     /// 0x100167A0, 0x100167AE, `var_1C` at the entry `esp - 0x1C`), else `prev`.
     fn stack_word(&self, prev: Option<i32>) -> Option<i32> {
-        let (_, res) = pattern(self.live[WAVE]);
+        let (_, res) = self.current_pattern();
         if self.live[ENABLED] != 0 && quotient(0, res).is_some() {
             Some(self.quotient)
         } else {

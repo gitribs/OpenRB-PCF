@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(OpenRbPcf VERSION 0.1.0 LANGUAGES C CXX)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
+project(OpenRbPcf VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,19 +33,72 @@ if(NOT CARGO_EXECUTABLE)
 endif()
 
 set(CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo")
-set(ORB_PCF_STATICLIB
-    "${CARGO_TARGET_DIR}/release/${CMAKE_STATIC_LIBRARY_PREFIX}orb_pcf${CMAKE_STATIC_LIBRARY_SUFFIX}")
+set(ORB_PCF_LIBNAME "${CMAKE_STATIC_LIBRARY_PREFIX}orb_pcf${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
-add_custom_command(
-    OUTPUT "${ORB_PCF_STATICLIB}"
-    COMMAND "${CMAKE_COMMAND}" -E env
-        "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
-        "${CARGO_EXECUTABLE}" build --release --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    BYPRODUCTS "${ORB_PCF_STATICLIB}"
-    COMMENT "Building orb_pcf staticlib"
-    VERBATIM
+file(GLOB_RECURSE ORB_PCF_RUST_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/*.rs"
+    "${CMAKE_SOURCE_DIR}/third_party/openrb-338/crates/*/*.rs"
+    "${CMAKE_SOURCE_DIR}/third_party/openrb-338/crates/*/src/*.rs"
+    "${CMAKE_SOURCE_DIR}/third_party/openrb-338/crates/*/Cargo.toml"
 )
+
+if(APPLE)
+    find_program(RUSTUP_EXECUTABLE rustup HINTS "$ENV{HOME}/.cargo/bin")
+    if(NOT RUSTUP_EXECUTABLE)
+        message(FATAL_ERROR "rustup not found; install Rust from https://rustup.rs")
+    endif()
+
+    set(ORB_PCF_RUST_TRIPLES x86_64-apple-darwin aarch64-apple-darwin)
+    set(ORB_PCF_STATICLIB "${CARGO_TARGET_DIR}/universal/${ORB_PCF_LIBNAME}")
+    set(ORB_PCF_ARCH_LIBS)
+    foreach(triple IN LISTS ORB_PCF_RUST_TRIPLES)
+        list(APPEND ORB_PCF_ARCH_LIBS
+            "${CARGO_TARGET_DIR}/${triple}/release/${ORB_PCF_LIBNAME}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT "${ORB_PCF_STATICLIB}"
+        COMMAND "${RUSTUP_EXECUTABLE}" target add ${ORB_PCF_RUST_TRIPLES}
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "${CARGO_EXECUTABLE}" build --release --target x86_64-apple-darwin
+            --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "${CARGO_EXECUTABLE}" build --release --target aarch64-apple-darwin
+            --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CARGO_TARGET_DIR}/universal"
+        COMMAND /usr/bin/lipo -create ${ORB_PCF_ARCH_LIBS} -output "${ORB_PCF_STATICLIB}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/Cargo.toml"
+            "${CMAKE_SOURCE_DIR}/Cargo.lock"
+            "${CMAKE_SOURCE_DIR}/include/orb_pcf.h"
+            ${ORB_PCF_RUST_SOURCES}
+        BYPRODUCTS ${ORB_PCF_ARCH_LIBS}
+        COMMENT "Building universal orb_pcf staticlib"
+        VERBATIM
+    )
+else()
+    set(ORB_PCF_STATICLIB "${CARGO_TARGET_DIR}/release/${ORB_PCF_LIBNAME}")
+    add_custom_command(
+        OUTPUT "${ORB_PCF_STATICLIB}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+            "${CARGO_EXECUTABLE}" build --release --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/Cargo.toml"
+            "${CMAKE_SOURCE_DIR}/Cargo.lock"
+            "${CMAKE_SOURCE_DIR}/include/orb_pcf.h"
+            ${ORB_PCF_RUST_SOURCES}
+        BYPRODUCTS "${ORB_PCF_STATICLIB}"
+        COMMENT "Building orb_pcf staticlib"
+        VERBATIM
+    )
+endif()
 add_custom_target(orb_pcf_rust DEPENDS "${ORB_PCF_STATICLIB}")
 
 add_library(orb_pcf_lib STATIC IMPORTED GLOBAL)
@@ -55,6 +113,7 @@ file(MAKE_DIRECTORY
 )
 
 juce_add_plugin(OpenRbPcf
+    VERSION 0.2.0
     COMPANY_NAME "OpenRB"
     BUNDLE_ID com.openrb.pcf
     PLUGIN_MANUFACTURER_CODE OpnR
@@ -71,7 +130,7 @@ juce_add_plugin(OpenRbPcf
     COPY_PLUGIN_AFTER_BUILD TRUE
     VST3_COPY_DIR "${ORB_PCF_OUTPUT_DIR}/VST3"
     AU_COPY_DIR "${ORB_PCF_OUTPUT_DIR}/AU"
-    VST3_CATEGORIES "Fx Filter"
+    VST3_CATEGORIES Fx Filter
     AU_MAIN_TYPE kAudioUnitType_Effect
 )
 

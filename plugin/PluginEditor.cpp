@@ -10,6 +10,11 @@ const juce::Colour kMuted { 0xff8a8680 };
 const juce::Colour kWell { 0xff1a1a1c };
 const juce::Colour kLine { 0xff3a3a40 };
 constexpr int kModeRadioGroup = 1;
+constexpr int kEditorW = 780;
+constexpr int kCollapsedH = 260;
+constexpr int kExpandedH = 370;
+constexpr int kMainRowH = 176;
+constexpr int kFoldSize = 20;
 
 class IncDecArrowButton final : public juce::Button
 {
@@ -85,7 +90,10 @@ void PcfLookAndFeel::drawTickBox (juce::Graphics& g, juce::Component& component,
     auto bounds = juce::Rectangle<float> (x, y, w, h).reduced (1.0f);
     g.setColour ((isEnabled ? kLine : kLine.withAlpha (0.5f)));
 
-    if (auto* button = dynamic_cast<juce::Button*> (&component); button != nullptr && button->getRadioGroupId() != 0)
+    auto* button = dynamic_cast<juce::Button*> (&component);
+    const bool radio = (button != nullptr && button->getRadioGroupId() != 0)
+                       || (bool) component.getProperties()["radioLook"];
+    if (radio)
     {
         g.drawEllipse (bounds, 1.4f);
         if (ticked)
@@ -110,9 +118,173 @@ juce::Button* PcfLookAndFeel::createSliderButton (juce::Slider&, bool isIncremen
     return new IncDecArrowButton (isIncrement);
 }
 
-juce::Font PcfLookAndFeel::getLabelFont (juce::Label&)
+juce::Font PcfLookAndFeel::getLabelFont (juce::Label& label)
 {
-    return juce::FontOptions (12.0f);
+    return label.getFont();
+}
+
+FoldArrow::FoldArrow() : juce::Button ({}) {}
+
+void FoldArrow::setOpen (bool shouldBeOpen)
+{
+    if (open == shouldBeOpen)
+        return;
+    open = shouldBeOpen;
+    repaint();
+}
+
+void FoldArrow::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kWell);
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (highlighted || down ? kAmber : kLine);
+    g.drawRoundedRectangle (r, 2.0f, 1.0f);
+
+    juce::Path p;
+    const auto c = r.getCentre();
+    constexpr float w = 5.0f;
+    constexpr float h = 3.6f;
+    if (open)
+        p.addTriangle (c.x, c.y - h, c.x + w, c.y + h * 0.55f, c.x - w, c.y + h * 0.55f);
+    else
+        p.addTriangle (c.x, c.y + h, c.x + w, c.y - h * 0.55f, c.x - w, c.y - h * 0.55f);
+
+    g.setColour (down ? kAmber : kText);
+    g.fillPath (p);
+}
+
+StepPad::StepPad() : juce::Button ({})
+{
+    setClickingTogglesState (false);
+}
+
+void StepPad::setLevel (int newLevel)
+{
+    newLevel = juce::jlimit (0, 2, newLevel);
+    if (level == newLevel)
+        return;
+    level = newLevel;
+    repaint();
+}
+
+void StepPad::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (kWell);
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (highlighted || down ? kAmber : kLine);
+    g.drawRoundedRectangle (r, 2.0f, 1.0f);
+
+    if (level <= 0)
+        return;
+
+    auto fill = r.reduced (2.4f);
+    if (level == 1)
+        fill = fill.removeFromBottom (fill.getHeight() * 0.55f);
+    g.setColour (kAmber.withAlpha (level == 1 ? 0.55f : 1.0f));
+    g.fillRoundedRectangle (fill, 1.5f);
+}
+
+SequencerStrip::SequencerStrip (PcfProcessor& p)
+    : enableA (p.apvts, "seq_enable", enable),
+      lengthA (p.apvts, "seq_length", length),
+      gridA (p.apvts, "seq_res", grid)
+{
+    enable.getProperties().set ("radioLook", true);
+    enable.setClickingTogglesState (true);
+    enable.setColour (juce::ToggleButton::textColourId, kText);
+    addAndMakeVisible (enable);
+
+    auto setupName = [this] (juce::Label& l, const juce::String& t)
+    {
+        l.setText (t, juce::dontSendNotification);
+        l.setJustificationType (juce::Justification::centredLeft);
+        l.setColour (juce::Label::textColourId, kMuted);
+        l.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        addAndMakeVisible (l);
+    };
+    setupName (lengthN, "STEPS");
+    setupName (gridN, "GRID");
+
+    setupIncDec (length);
+    setupIncDec (grid);
+    grid.textFromValueFunction = [] (double v)
+    {
+        static constexpr int res[] = { 8, 16, 32 };
+        return juce::String (res[juce::jlimit (0, 2, juce::roundToInt (v))]);
+    };
+    grid.valueFromTextFunction = [] (const juce::String& t)
+    {
+        const int n = t.getIntValue();
+        if (n <= 8)
+            return 0.0;
+        if (n <= 16)
+            return 1.0;
+        return 2.0;
+    };
+    grid.updateText();
+    length.onValueChange = [this] { resized(); };
+
+    for (int i = 0; i < 32; ++i)
+    {
+        auto* param = p.apvts.getParameter (juce::String::formatted ("seq_%02d", i));
+        jassert (param != nullptr);
+        addAndMakeVisible (pads[(size_t) i]);
+        padA[(size_t) i] = std::make_unique<juce::ParameterAttachment> (
+            *param,
+            [this, i] (float value)
+            {
+                pads[(size_t) i].setLevel (juce::roundToInt (value));
+            });
+        pads[(size_t) i].onClick = [this, i]
+        {
+            if (padA[(size_t) i] == nullptr)
+                return;
+            const int next = (pads[(size_t) i].getLevel() + 1) % 3;
+            padA[(size_t) i]->setValueAsCompleteGesture ((float) next);
+        };
+        padA[(size_t) i]->sendInitialUpdate();
+    }
+}
+
+SequencerStrip::~SequencerStrip() = default;
+
+void SequencerStrip::setupIncDec (juce::Slider& s)
+{
+    s.setSliderStyle (juce::Slider::IncDecButtons);
+    s.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 40, 28);
+    s.setNumDecimalPlacesToDisplay (0);
+    s.setColour (juce::Slider::textBoxBackgroundColourId, kWell);
+    s.setColour (juce::Slider::textBoxOutlineColourId, kLine);
+    addAndMakeVisible (s);
+}
+
+void SequencerStrip::resized()
+{
+    auto r = getLocalBounds();
+    auto top = r.removeFromTop (36);
+    enable.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, 28));
+    lengthN.setBounds (top.removeFromLeft (48).withSizeKeepingCentre (48, 18));
+    length.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, 32));
+    top.removeFromLeft (12);
+    gridN.setBounds (top.removeFromLeft (40).withSizeKeepingCentre (40, 18));
+    grid.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, 32));
+
+    r.removeFromTop (8);
+    r.removeFromRight (kFoldSize + 8);
+    const int n = juce::jlimit (1, 32, juce::roundToInt (length.getValue()));
+    const int gap = 3;
+    const int w = juce::jmax (8, (r.getWidth() - gap * (n - 1)) / n);
+    const int h = juce::jmin (36, r.getHeight());
+    const int y = r.getY() + (r.getHeight() - h) / 2;
+    for (int i = 0; i < 32; ++i)
+    {
+        const bool show = i < n;
+        pads[(size_t) i].setVisible (show);
+        if (show)
+            pads[(size_t) i].setBounds (r.getX() + i * (w + gap), y, w, h);
+    }
 }
 
 PcfEditor::PcfEditor (PcfProcessor& p)
@@ -124,13 +296,13 @@ PcfEditor::PcfEditor (PcfProcessor& p)
       patternA (p.apvts, "pattern", pattern)
 {
     setLookAndFeel (&lnf);
-    setSize (780, 260);
+    setSize (kEditorW, kCollapsedH);
     setResizable (false, false);
 
-    title.setText ("OpenRb PCF", juce::dontSendNotification);
+    title.setText ("OpenRB PCF", juce::dontSendNotification);
     title.setJustificationType (juce::Justification::centredLeft);
     title.setColour (juce::Label::textColourId, kAmber);
-    title.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    title.setFont (juce::FontOptions().withHeight (18.0f).withStyle ("Bold"));
     addAndMakeVisible (title);
 
     auto setupName = [this] (juce::Label& l, const juce::String& t)
@@ -157,6 +329,28 @@ PcfEditor::PcfEditor (PcfProcessor& p)
     setupName (modeN, "MODE");
     patternN.setJustificationType (juce::Justification::centredLeft);
     modeN.setJustificationType (juce::Justification::centredLeft);
+
+    seqStrip = std::make_unique<SequencerStrip> (p);
+    addChildComponent (*seqStrip);
+
+    fold.onClick = [this] { setSeqOpen (! seqOpen); };
+    addAndMakeVisible (fold);
+
+    if (auto* seqParam = p.apvts.getParameter ("seq_enable"))
+    {
+        seqEnableWatch = std::make_unique<juce::ParameterAttachment> (
+            *seqParam,
+            [this] (float value)
+            {
+                const bool on = value >= 0.5f;
+                const float a = on ? 0.45f : 1.0f;
+                pattern.setEnabled (! on);
+                patternN.setEnabled (! on);
+                pattern.setAlpha (a);
+                patternN.setAlpha (a);
+            });
+        seqEnableWatch->sendInitialUpdate();
+    }
 }
 
 PcfEditor::~PcfEditor()
@@ -228,21 +422,43 @@ void PcfEditor::paint (juce::Graphics& g)
     g.drawRoundedRectangle (panel, 8.0f, 1.0f);
 }
 
+void PcfEditor::setSeqOpen (bool open)
+{
+    if (seqOpen == open)
+        return;
+    seqOpen = open;
+    fold.setOpen (open);
+    if (seqStrip != nullptr)
+        seqStrip->setVisible (open);
+    setSize (kEditorW, open ? kExpandedH : kCollapsedH);
+}
+
 void PcfEditor::resized()
 {
+    auto corner = getLocalBounds().reduced (16);
+    fold.setBounds (corner.removeFromBottom (kFoldSize).removeFromRight (kFoldSize));
+    fold.toFront (false);
+
     auto r = getLocalBounds().reduced (24);
     title.setBounds (r.removeFromTop (28));
     r.removeFromTop (8);
 
-    auto right = r.removeFromRight (168);
-    r.removeFromRight (16);
+    auto main = r.removeFromTop (kMainRowH);
+    if (seqOpen && seqStrip != nullptr)
+    {
+        r.removeFromTop (8);
+        seqStrip->setBounds (r);
+    }
+
+    auto right = main.removeFromRight (168);
+    main.removeFromRight (16);
 
     const int n = 4;
-    const int w = r.getWidth() / n;
-    const int y = r.getY();
-    const int h = r.getHeight();
+    const int w = main.getWidth() / n;
+    const int y = main.getY();
+    const int h = main.getHeight();
 
-    auto slot = [&] (int i) { return juce::Rectangle<int> (r.getX() + i * w, y, w, h); };
+    auto slot = [&] (int i) { return juce::Rectangle<int> (main.getX() + i * w, y, w, h); };
 
     auto place = [&] (juce::Slider& s, juce::Label& name, int i)
     {

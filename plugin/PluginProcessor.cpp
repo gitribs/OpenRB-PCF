@@ -3,11 +3,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace
 {
 constexpr double kEngineRate = 44100.0;
 constexpr int kPcfBlock = 64;
+
+// Starting values for a newly inserted effect. Hosts restore project and preset
+// state through setStateInformation, which replaces these after construction.
+constexpr int kDefaultFreq = 64;
+constexpr int kDefaultRes = 9;
+constexpr int kDefaultAmount = 109;
+constexpr int kDefaultDecay = 21;
+constexpr int kDefaultPattern = 5;
+constexpr int kDefaultSeqLength = 16;
+constexpr uint8_t kSeqVelocities[] = { 0, 60, 120 };
+constexpr uint8_t kSeqResolutions[] = { 8, 16, 32 };
+
+juce::String seqPadId (int index)
+{
+    char id[16];
+    std::snprintf (id, sizeof (id), "seq_%02d", index);
+    return juce::String (id);
+}
 
 bool ratesMatch (double a, double b)
 {
@@ -28,18 +47,27 @@ PcfProcessor::~PcfProcessor() = default;
 
 juce::AudioProcessorValueTreeState::ParameterLayout PcfProcessor::createLayout()
 {
+    using juce::AudioParameterBool;
     using juce::AudioParameterChoice;
     using juce::AudioParameterInt;
     using juce::ParameterID;
 
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "freq", 1 }, "Frequency", 0, 127, 70));
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "res", 1 }, "Resonance", 0, 127, 64));
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "amount", 1 }, "Amount", 0, 127, 40));
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "decay", 1 }, "Decay", 0, 127, 90));
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "pattern", 1 }, "Pattern", 0, 54, 24));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "freq", 1 }, "Frequency", 0, 127, kDefaultFreq));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "res", 1 }, "Resonance", 0, 127, kDefaultRes));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "amount", 1 }, "Amount", 0, 127, kDefaultAmount));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "decay", 1 }, "Decay", 0, 127, kDefaultDecay));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "pattern", 1 }, "Pattern", 0, 54, kDefaultPattern));
     p.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { "mode", 1 }, "Mode", juce::StringArray { "Low-pass", "Band-pass" }, 0));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "seq_enable", 1 }, "Seq Enable", false));
+    p.push_back (std::make_unique<AudioParameterInt> (
+        ParameterID { "seq_length", 1 }, "Seq Length", 1, 32, kDefaultSeqLength));
+    p.push_back (std::make_unique<AudioParameterChoice> (
+        ParameterID { "seq_res", 1 }, "Seq Grid", juce::StringArray { "8", "16", "32" }, 1));
+    for (int i = 0; i < 32; ++i)
+        p.push_back (std::make_unique<AudioParameterInt> (
+            ParameterID { seqPadId (i), 1 }, "Seq Step " + juce::String (i + 1), 0, 2, 0));
     return { p.begin(), p.end() };
 }
 
@@ -125,13 +153,22 @@ OrbPcfParams PcfProcessor::readParams (bool bypass) const
     };
 
     OrbPcfParams params {};
-    params.frequency = (uint8_t) juce::jlimit (0, 127, asInt ("freq", 70));
-    params.resonance = (uint8_t) juce::jlimit (0, 127, asInt ("res", 64));
-    params.amount = (uint8_t) juce::jlimit (0, 127, asInt ("amount", 40));
-    params.decay = (uint8_t) juce::jlimit (0, 127, asInt ("decay", 90));
-    params.pattern = (uint8_t) juce::jlimit (0, 54, asInt ("pattern", 24));
+    params.frequency = (uint8_t) juce::jlimit (0, 127, asInt ("freq", kDefaultFreq));
+    params.resonance = (uint8_t) juce::jlimit (0, 127, asInt ("res", kDefaultRes));
+    params.amount = (uint8_t) juce::jlimit (0, 127, asInt ("amount", kDefaultAmount));
+    params.decay = (uint8_t) juce::jlimit (0, 127, asInt ("decay", kDefaultDecay));
+    params.pattern = (uint8_t) juce::jlimit (0, 54, asInt ("pattern", kDefaultPattern));
     params.mode = asInt ("mode", 0) == 0 ? 1 : 0;
     params.bypass = bypass ? 1 : 0;
+    params.seq_enable = asInt ("seq_enable", 0) != 0 ? 1 : 0;
+    params.seq_length = (uint8_t) juce::jlimit (1, 32, asInt ("seq_length", kDefaultSeqLength));
+    params.seq_resolution = kSeqResolutions[juce::jlimit (0, 2, asInt ("seq_res", 1))];
+    for (int i = 0; i < 32; ++i)
+    {
+        const auto id = seqPadId (i);
+        const int level = juce::jlimit (0, 2, asInt (id.toRawUTF8(), 0));
+        params.seq_steps[i] = kSeqVelocities[level];
+    }
     return params;
 }
 

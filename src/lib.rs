@@ -35,6 +35,14 @@ pub struct Params {
     /// `1` is low-pass; anything else is band-pass.
     pub mode: u8,
     pub bypass: u8,
+    /// Non-zero: the custom step table drives the filter instead of [`Self::pattern`].
+    pub seq_enable: u8,
+    /// Loop length 1..=32 when the sequencer is on.
+    pub seq_length: u8,
+    /// Steps per bar: 8, 16 or 32. Any other value becomes 16.
+    pub seq_resolution: u8,
+    /// Engine velocities for the 32 pad slots (0 / 60 / 120 from the UI).
+    pub seq_steps: [u8; 32],
 }
 
 impl Default for Params {
@@ -48,6 +56,10 @@ impl Default for Params {
             pattern: d[pcf::WAVE],
             mode: d[pcf::MODE],
             bypass: 0,
+            seq_enable: 0,
+            seq_length: 16,
+            seq_resolution: 16,
+            seq_steps: [0; 32],
         }
     }
 }
@@ -298,6 +310,7 @@ impl PcfStereo {
         let resonance = p.resonance.min(127);
         let amount = p.amount.min(127);
         let decay = p.decay.min(127);
+        let seq = seq_override(&p);
         for inst in [&mut self.left, &mut self.right] {
             inst.set_param(pcf::FREQUENCY as u8, frequency);
             inst.set_param(pcf::RESONANCE as u8, resonance);
@@ -306,8 +319,23 @@ impl PcfStereo {
             inst.set_param(pcf::WAVE as u8, pattern);
             inst.set_param(pcf::MODE as u8, p.mode);
             inst.set_param(pcf::ENABLED as u8, 1);
+            inst.set_pattern_override(seq);
         }
     }
+}
+
+fn seq_override(p: &Params) -> Option<pcf::PatternOverride> {
+    if p.seq_enable == 0 {
+        return None;
+    }
+    Some(pcf::PatternOverride {
+        length: p.seq_length.clamp(1, 32) as u16,
+        resolution: match p.seq_resolution {
+            8 | 32 => p.seq_resolution as u16,
+            _ => 16,
+        },
+        steps: p.seq_steps,
+    })
 }
 
 #[cfg(test)]
