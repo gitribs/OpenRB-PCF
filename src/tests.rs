@@ -239,6 +239,46 @@ fn stopped_holds_the_tick() {
     assert_eq!(p.left().step, pcf::quotient(tick, 16).unwrap() % 16);
 }
 
+/// Stopped callbacks take step 0; Play with a stalled host position must still leave it.
+#[test]
+fn play_after_holds_with_stalled_ppq_starts_the_clock() {
+    let params = Params {
+        pattern: 0,
+        amount: 40,
+        frequency: 0,
+        ..Params::default()
+    };
+    let mut p = PcfStereo::new();
+    let stopped = Playhead {
+        bpm: 120.0,
+        ppq: 0.0,
+        playing: false,
+    };
+    for _ in 0..8 {
+        let mut l = [0.1f32; BLOCK];
+        let mut r = [0.1f32; BLOCK];
+        p.process(&mut l, &mut r, params, stopped);
+    }
+    assert_eq!(p.left().step, 0);
+
+    p.restart_clock();
+    for i in 0..100 {
+        let mut l = [0.1f32; BLOCK];
+        let mut r = [0.1f32; BLOCK];
+        p.process(&mut l, &mut r, params, playing(0.0));
+        if i == 0 {
+            assert_eq!(p.left().step, 0);
+            assert!(p.left().env > 1.0, "restarted downbeat must open the gate");
+        }
+    }
+    assert!(
+        p.last_tick().unwrap() >= 48,
+        "tick {} never reached the next 16th",
+        p.last_tick().unwrap()
+    );
+    assert_ne!(p.left().step, 0);
+}
+
 /// ReBirth keeps counting while playing. A host that repeats one quarter-note position
 /// must not pin the pattern to step 0.
 #[test]

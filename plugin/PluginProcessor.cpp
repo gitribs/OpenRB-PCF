@@ -20,6 +20,15 @@ constexpr int kDefaultPattern = 5;
 constexpr int kDefaultSeqLength = 16;
 constexpr uint8_t kSeqVelocities[] = { 0, 60, 120 };
 constexpr uint8_t kSeqResolutions[] = { 8, 16, 32 };
+constexpr float kUntrustedPlayFloor = 1.0e-4f;
+
+bool bufferHasEnergy (const float* left, const float* right, int n)
+{
+    for (int i = 0; i < n; ++i)
+        if (std::abs (left[i]) > kUntrustedPlayFloor || std::abs (right[i]) > kUntrustedPlayFloor)
+            return true;
+    return false;
+}
 
 juce::String seqPadId (int index)
 {
@@ -180,6 +189,37 @@ void PcfProcessor::clearPlayClock()
     lastRawPpq = 0.0;
     haveLastSamples = false;
     lastSamples = 0;
+    sawTrustedPlay = false;
+    latchedUntrustedPlay = false;
+}
+
+void PcfProcessor::latchUntrustedPlay (OrbPcfPlayhead& head, const float* left, const float* right, int nHost)
+{
+    if (head.playing != 0)
+        sawTrustedPlay = true;
+
+    if (sawTrustedPlay)
+        return;
+
+    // Hosts such as Reason can omit kPlaying and stall PPQ on the first Play
+    // after insert. Hold until audio actually arrives, then free-run from 0 so
+    // the pattern starts with the sound. A later trusted transport snap replaces this.
+    if (!latchedUntrustedPlay && nHost > 0 && bufferHasEnergy (left, right, nHost))
+    {
+        latchedUntrustedPlay = true;
+        havePlayOrigin = true;
+        playOrigin = 0.0;
+        haveLastRawPpq = false;
+        lastRawPpq = 0.0;
+        haveLastSamples = false;
+        lastSamples = 0;
+        if (pcf)
+            orb_pcf_restart_clock (pcf.get());
+        head.ppq = 0.0;
+    }
+
+    if (latchedUntrustedPlay)
+        head.playing = 1;
 }
 
 double PcfProcessor::startingQuarter (double rawPpq, bool hasPpq, juce::int64 samples, bool hasSamples, double bpm) const
@@ -215,7 +255,7 @@ OrbPcfPlayhead PcfProcessor::readPlayhead (int nHost)
 
             const bool ppqMoving = hasPpq && haveLastRawPpq && std::abs (rawPpq - lastRawPpq) > 1.0e-9;
             const bool samplesMoving = hasSamples && haveLastSamples && samples != lastSamples;
-            head.playing = (info->getIsPlaying() || ppqMoving || samplesMoving) ? 1 : 0;
+            head.playing = (info->getIsPlaying() || info->getIsRecording() || ppqMoving || samplesMoving) ? 1 : 0;
 
             const double advance = (hostRate > 0.0 && nHost > 0)
                                        ? (double) nHost * head.bpm / (hostRate * 60.0)
@@ -342,7 +382,8 @@ void PcfProcessor::processBuffer (juce::AudioBuffer<float>& buffer, bool bypass)
         std::memcpy (right, left, (size_t) nHost * sizeof (float));
 
     const auto params = readParams (bypass);
-    const auto head = readPlayhead (nHost);
+    auto head = readPlayhead (nHost);
+    latchUntrustedPlay (head, left, right, nHost);
 
     if (exact44100)
     {

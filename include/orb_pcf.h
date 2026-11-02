@@ -32,6 +32,7 @@ typedef struct OrbPcfPlayhead {
 OrbPcf *orb_pcf_new(void);
 void orb_pcf_free(OrbPcf *pcf);
 void orb_pcf_reset(OrbPcf *pcf);
+void orb_pcf_restart_clock(OrbPcf *pcf);
 int32_t orb_pcf_latency(void);
 void orb_pcf_process(OrbPcf *pcf,
                      float *left,

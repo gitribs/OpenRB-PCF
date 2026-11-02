@@ -52,6 +52,7 @@ private:
     OrbPcfPlayhead readPlayhead (int nHost);
     double startingQuarter (double rawPpq, bool hasPpq, juce::int64 samples, bool hasSamples, double bpm) const;
     void clearPlayClock();
+    void latchUntrustedPlay (OrbPcfPlayhead& head, const float* left, const float* right, int nHost);
     int latencySamples() const;
     int hostToEngine (const float* left, const float* right, int nHost);
     void engineToHost (float* left, float* right, int nHost, int nEngine);
@@ -78,6 +79,8 @@ private:
     double lastRawPpq = 0.0;
     bool haveLastSamples = false;
     juce::int64 lastSamples = 0;
+    bool sawTrustedPlay = false;
+    bool latchedUntrustedPlay = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PcfProcessor)
 };

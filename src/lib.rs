@@ -205,6 +205,20 @@ impl PcfStereo {
         self.blocks_processed = 0;
     }
 
+    /// Song position back to 0 without touching filter memory or the delay.
+    ///
+    /// Reason still processes inserts while stopped, so the first Hold block can take step 0
+    /// before the user hits Play. Restarting the clock makes that downbeat fire again.
+    pub fn restart_clock(&mut self) {
+        self.pos = 0.0;
+        self.was_playing = false;
+        self.last_ppq = None;
+        self.held_tick = 0;
+        self.last_tick = None;
+        self.left.step = -1;
+        self.right.step = -1;
+    }
+
     pub fn latency() -> usize {
         BLOCK
     }
@@ -369,6 +383,15 @@ pub unsafe extern "C" fn orb_pcf_free(pcf: *mut PcfStereo) {
 pub unsafe extern "C" fn orb_pcf_reset(pcf: *mut PcfStereo) {
     if let Some(p) = unsafe { pcf.as_mut() } {
         p.reset();
+    }
+}
+
+/// # Safety
+/// `pcf` is a pointer from [`orb_pcf_new`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orb_pcf_restart_clock(pcf: *mut PcfStereo) {
+    if let Some(p) = unsafe { pcf.as_mut() } {
+        p.restart_clock();
     }
 }
 
