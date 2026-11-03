@@ -5,7 +5,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 endif()
 
-project(OpenRbPcf VERSION 0.2.0 LANGUAGES C CXX)
+project(OpenRbPcf VERSION 0.2.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -135,7 +135,7 @@ file(MAKE_DIRECTORY
 )
 
 juce_add_plugin(OpenRbPcf
-    VERSION 0.2.0
+    VERSION 0.2.1
     COMPANY_NAME "OpenRB"
     BUNDLE_ID com.openrb.pcf
     PLUGIN_MANUFACTURER_CODE OpnR
