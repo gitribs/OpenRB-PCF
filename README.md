@@ -43,6 +43,18 @@ output/AU/OpenRB PCF.component
 output/Standalone/OpenRB PCF.app
 ```
 
+Those copies are ad-hoc signed and are fine on this Mac. To share a zip that Gatekeeper will
+load on other machines (Intel and Apple Silicon), install a Developer ID Application
+certificate and a notary profile, then:
+
+```sh
+./scripts/package-macos.sh
+```
+
+That rebuilds, signs with the Developer ID, notarizes, and writes
+`output/OpenRB-PCF-macOS-vVERSION.zip`. Run `./scripts/package-macos.sh --help` for the
+one-time `notarytool store-credentials` setup. `--skip-build` packages the current `output/`.
+
 ## Controls
 
 | Control    | Range        | Notes                          |
