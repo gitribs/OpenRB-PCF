@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include <functional>
+
 namespace
 {
 const juce::Colour kBg { 0xff161618 };
@@ -15,6 +17,8 @@ constexpr int kCollapsedH = 260;
 constexpr int kExpandedH = 370;
 constexpr int kMainRowH = 176;
 constexpr int kFoldSize = 20;
+constexpr int kGearSize = 24;
+const juce::Colour kError { 0xffd06060 };
 
 class IncDecArrowButton final : public juce::Button
 {
@@ -56,6 +60,15 @@ PcfLookAndFeel::PcfLookAndFeel()
     setColour (juce::ToggleButton::tickColourId, kAmber);
     setColour (juce::ToggleButton::tickDisabledColourId, kLine);
     setColour (juce::CaretComponent::caretColourId, kAmber);
+    setColour (juce::TextEditor::backgroundColourId, kWell);
+    setColour (juce::TextEditor::textColourId, kText);
+    setColour (juce::TextEditor::outlineColourId, kLine);
+    setColour (juce::TextEditor::focusedOutlineColourId, kAmber);
+    setColour (juce::TextEditor::highlightColourId, kAmber);
+    setColour (juce::TextEditor::highlightedTextColourId, kBg);
+    setColour (juce::TextButton::buttonColourId, kWell);
+    setColour (juce::TextButton::textColourOffId, kText);
+    setColour (juce::TextButton::textColourOnId, kText);
 }
 
 void PcfLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -113,6 +126,16 @@ void PcfLookAndFeel::drawTickBox (juce::Graphics& g, juce::Component& component,
     }
 }
 
+void PcfLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b,
+                                           const juce::Colour&, bool highlighted, bool down)
+{
+    auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kWell);
+    g.fillRoundedRectangle (r, 3.0f);
+    g.setColour (highlighted || down ? kAmber : kLine);
+    g.drawRoundedRectangle (r, 3.0f, 1.0f);
+}
+
 juce::Button* PcfLookAndFeel::createSliderButton (juce::Slider&, bool isIncrement)
 {
     return new IncDecArrowButton (isIncrement);
@@ -121,6 +144,39 @@ juce::Button* PcfLookAndFeel::createSliderButton (juce::Slider&, bool isIncremen
 juce::Font PcfLookAndFeel::getLabelFont (juce::Label& label)
 {
     return label.getFont();
+}
+
+GearButton::GearButton() : juce::Button ({})
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void GearButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kWell);
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (highlighted || down ? kAmber : kLine);
+    g.drawRoundedRectangle (r, 2.0f, 1.0f);
+
+    const auto c = r.getCentre();
+    constexpr float outer = 6.6f;
+    constexpr float inner = 4.2f;
+    constexpr float hole = 1.8f;
+    constexpr float toothW = 2.3f;
+    g.setColour (down ? kAmber : kText);
+    juce::Path gear;
+    for (int i = 0; i < 4; ++i)
+    {
+        juce::Path tooth;
+        tooth.addRoundedRectangle (-toothW * 0.5f, -outer, toothW, outer * 2.0f, 0.45f);
+        gear.addPath (tooth, juce::AffineTransform::rotation ((float) i * juce::MathConstants<float>::pi * 0.25f)
+                                 .translated (c.x, c.y));
+    }
+    gear.addEllipse (c.x - inner, c.y - inner, inner * 2.0f, inner * 2.0f);
+    g.fillPath (gear);
+    g.setColour (kWell);
+    g.fillEllipse (c.x - hole, c.y - hole, hole * 2.0f, hole * 2.0f);
 }
 
 FoldArrow::FoldArrow() : juce::Button ({}) {}
@@ -287,8 +343,138 @@ void SequencerStrip::resized()
     }
 }
 
+class RecallImportPanel final : public juce::Component
+{
+public:
+    RecallImportPanel (PcfProcessor& p, std::function<void()> onCloseIn)
+        : owner (p), onClose (std::move (onCloseIn))
+    {
+        heading.setText ("Import recall", juce::dontSendNotification);
+        heading.setJustificationType (juce::Justification::centredLeft);
+        heading.setColour (juce::Label::textColourId, kAmber);
+        heading.setFont (juce::FontOptions().withHeight (16.0f).withStyle ("Bold"));
+        addAndMakeVisible (heading);
+
+        hint.setText ("Paste OpenRB PCF settings copied from Modloader.", juce::dontSendNotification);
+        hint.setJustificationType (juce::Justification::centredLeft);
+        hint.setColour (juce::Label::textColourId, kMuted);
+        hint.setFont (juce::FontOptions (12.0f));
+        addAndMakeVisible (hint);
+
+        editor.setMultiLine (true);
+        editor.setReturnKeyStartsNewLine (true);
+        editor.setFont (juce::FontOptions (13.0f));
+        editor.setTextToShowWhenEmpty ("openrb-pcf 1\nfrequency: 64\nresonance: 9\n...", kMuted);
+        addAndMakeVisible (editor);
+
+        status.setJustificationType (juce::Justification::centredLeft);
+        status.setColour (juce::Label::textColourId, kError);
+        status.setFont (juce::FontOptions (12.0f));
+        addAndMakeVisible (status);
+
+        paste.setButtonText ("Paste");
+        paste.onClick = [this]
+        {
+            editor.setText (juce::SystemClipboard::getTextFromClipboard());
+            status.setText ({}, juce::dontSendNotification);
+        };
+        addAndMakeVisible (paste);
+
+        import.setButtonText ("Import");
+        import.onClick = [this]
+        {
+            const auto err = owner.importRecall (editor.getText());
+            if (err.isEmpty())
+            {
+                if (onClose)
+                    onClose();
+                return;
+            }
+            status.setColour (juce::Label::textColourId, kError);
+            status.setText (err, juce::dontSendNotification);
+        };
+        addAndMakeVisible (import);
+
+        close.setButtonText ("Close");
+        close.onClick = [this]
+        {
+            if (onClose)
+                onClose();
+        };
+        addAndMakeVisible (close);
+        setWantsKeyboardFocus (true);
+    }
+
+    void reset()
+    {
+        editor.clear();
+        status.setText ({}, juce::dontSendNotification);
+        editor.grabKeyboardFocus();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (kBg.withAlpha (0.82f));
+        auto card = cardBounds().toFloat();
+        g.setColour (kPanel);
+        g.fillRoundedRectangle (card, 8.0f);
+        g.setColour (kLine);
+        g.drawRoundedRectangle (card, 8.0f, 1.0f);
+    }
+
+    void resized() override
+    {
+        auto r = cardBounds().reduced (16);
+        heading.setBounds (r.removeFromTop (22));
+        hint.setBounds (r.removeFromTop (18));
+        r.removeFromTop (8);
+        auto buttons = r.removeFromBottom (28);
+        r.removeFromBottom (8);
+        status.setBounds (r.removeFromBottom (18));
+        r.removeFromBottom (8);
+        editor.setBounds (r);
+
+        paste.setBounds (buttons.removeFromLeft (80));
+        buttons.removeFromLeft (8);
+        import.setBounds (buttons.removeFromLeft (80));
+        close.setBounds (buttons.removeFromRight (80));
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! cardBounds().contains (e.getPosition()) && onClose)
+            onClose();
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose)
+                onClose();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::Rectangle<int> cardBounds() const
+    {
+        return getLocalBounds().reduced (40, 24).withSizeKeepingCentre (
+            juce::jmin (440, getWidth() - 48),
+            juce::jmin (208, getHeight() - 32));
+    }
+
+    PcfProcessor& owner;
+    std::function<void()> onClose;
+    juce::Label heading, hint, status;
+    juce::TextEditor editor;
+    juce::TextButton paste, import, close;
+};
+
 PcfEditor::PcfEditor (PcfProcessor& p)
     : AudioProcessorEditor (&p),
+      owner (p),
       freqA (p.apvts, "freq", freq),
       resA (p.apvts, "res", res),
       amountA (p.apvts, "amount", amount),
@@ -335,6 +521,9 @@ PcfEditor::PcfEditor (PcfProcessor& p)
 
     fold.onClick = [this] { setSeqOpen (! seqOpen); };
     addAndMakeVisible (fold);
+
+    gear.onClick = [this] { setImportOpen (importPanel == nullptr || ! importPanel->isVisible()); };
+    addAndMakeVisible (gear);
 
     if (auto* seqParam = p.apvts.getParameter ("seq_enable"))
     {
@@ -433,14 +622,45 @@ void PcfEditor::setSeqOpen (bool open)
     setSize (kEditorW, open ? kExpandedH : kCollapsedH);
 }
 
+void PcfEditor::setImportOpen (bool open)
+{
+    if (open)
+    {
+        if (importPanel == nullptr)
+        {
+            importPanel = std::make_unique<RecallImportPanel> (owner, [this] { setImportOpen (false); });
+            addAndMakeVisible (*importPanel);
+        }
+        importPanel->setBounds (getLocalBounds());
+        importPanel->setVisible (true);
+        importPanel->toFront (false);
+        gear.toFront (false);
+        importPanel->reset();
+        return;
+    }
+
+    if (importPanel != nullptr)
+        importPanel->setVisible (false);
+}
+
 void PcfEditor::resized()
 {
+    auto bounds = getLocalBounds();
+    if (importPanel != nullptr)
+        importPanel->setBounds (bounds);
+
+    auto top = bounds.reduced (16);
+    gear.setBounds (top.removeFromTop (kGearSize).removeFromRight (kGearSize));
+    gear.toFront (false);
+
     auto corner = getLocalBounds().reduced (16);
     fold.setBounds (corner.removeFromBottom (kFoldSize).removeFromRight (kFoldSize));
     fold.toFront (false);
 
     auto r = getLocalBounds().reduced (24);
-    title.setBounds (r.removeFromTop (28));
+    auto titleRow = r.removeFromTop (28);
+    titleRow.removeFromRight (kGearSize);
+    title.setBounds (titleRow);
     r.removeFromTop (8);
 
     auto main = r.removeFromTop (kMainRowH);

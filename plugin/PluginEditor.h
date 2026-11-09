@@ -14,6 +14,8 @@ public:
     void drawTickBox (juce::Graphics&, juce::Component&, float x, float y, float w, float h,
                       bool ticked, bool isEnabled, bool shouldDrawButtonAsHighlighted,
                       bool shouldDrawButtonAsDown) override;
+    void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
+                               bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     juce::Button* createSliderButton (juce::Slider&, bool isIncrement) override;
     juce::Font getLabelFont (juce::Label&) override;
 };
@@ -29,6 +31,15 @@ public:
 private:
     bool open = false;
 };
+
+class GearButton final : public juce::Button
+{
+public:
+    GearButton();
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+};
+
+class RecallImportPanel;
 
 class StepPad final : public juce::Button
 {
@@ -76,14 +87,18 @@ private:
     void setupPattern();
     void setupModeButtons (PcfProcessor& p);
     void setSeqOpen (bool open);
+    void setImportOpen (bool open);
 
+    PcfProcessor& owner;
     PcfLookAndFeel lnf;
 
     juce::Slider freq, res, amount, decay, pattern;
     juce::ToggleButton lowPass { "Low-pass" }, bandPass { "Band-pass" };
     juce::Label title, freqN, resN, amountN, decayN, patternN, modeN;
     FoldArrow fold;
+    GearButton gear;
     std::unique_ptr<SequencerStrip> seqStrip;
+    std::unique_ptr<RecallImportPanel> importPanel;
 
     juce::AudioProcessorValueTreeState::SliderAttachment freqA, resA, amountA, decayA, patternA;
     std::unique_ptr<juce::ParameterAttachment> modeA;

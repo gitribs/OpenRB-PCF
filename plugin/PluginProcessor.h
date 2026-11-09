@@ -38,6 +38,9 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // empty = success; otherwise a short reason for the editor to show
+    juce::String importRecall (const juce::String& text);
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:

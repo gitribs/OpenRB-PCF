@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "RecallImport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -411,6 +412,16 @@ void PcfProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce:
 {
     juce::ignoreUnused (midi);
     processBuffer (buffer, true);
+}
+
+juce::String PcfProcessor::importRecall (const juce::String& text)
+{
+    PcfRecall parsed;
+    const auto err = parseRecall (text, parsed);
+    if (err.isNotEmpty())
+        return err;
+    applyRecall (apvts, parsed);
+    return {};
 }
 
 juce::AudioProcessorEditor* PcfProcessor::createEditor()

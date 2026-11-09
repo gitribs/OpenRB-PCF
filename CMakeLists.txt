@@ -164,6 +164,8 @@ target_sources(OpenRbPcf
         plugin/PluginProcessor.h
         plugin/PluginEditor.cpp
         plugin/PluginEditor.h
+        plugin/RecallImport.cpp
+        plugin/RecallImport.h
 )
 
 target_include_directories(OpenRbPcf PRIVATE include)
@@ -190,6 +192,46 @@ target_link_libraries(OpenRbPcf
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+juce_add_console_app(OpenRbPcfTests
+    PRODUCT_NAME "OpenRbPcfTests"
+)
+
+juce_generate_juce_header(OpenRbPcfTests)
+
+target_sources(OpenRbPcfTests
+    PRIVATE
+        tests/RecallImportTests.cpp
+        plugin/PluginProcessor.cpp
+        plugin/PluginProcessor.h
+        plugin/PluginEditor.cpp
+        plugin/PluginEditor.h
+        plugin/RecallImport.cpp
+        plugin/RecallImport.h
+)
+
+target_include_directories(OpenRbPcfTests PRIVATE include plugin)
+
+target_compile_definitions(OpenRbPcfTests
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_REPORT_APP_USAGE=0
+    PRIVATE
+        JucePlugin_Name="OpenRB PCF"
+)
+
+target_link_libraries(OpenRbPcfTests
+    PRIVATE
+        ${ORB_PCF_LINK_LIB}
+        juce::juce_audio_utils
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+enable_testing()
+add_test(NAME OpenRbPcfRecallImport COMMAND OpenRbPcfTests)
 
 # JUCE's copy step skips Standalone (it is an app, not a plugin format folder).
 if(APPLE)

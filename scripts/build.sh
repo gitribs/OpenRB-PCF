@@ -5,3 +5,5 @@ cd "$root"
 cargo test
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
+cmake --build build --config Release --target OpenRbPcfTests
+ctest --test-dir build -C Release --output-on-failure
