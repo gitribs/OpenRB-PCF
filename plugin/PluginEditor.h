@@ -16,6 +16,8 @@ public:
                       bool shouldDrawButtonAsDown) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
                                bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
+    void drawToggleButton (juce::Graphics&, juce::ToggleButton&,
+                           bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     juce::Button* createSliderButton (juce::Slider&, bool isIncrement) override;
     juce::Font getLabelFont (juce::Label&) override;
 };
@@ -37,6 +39,16 @@ class GearButton final : public juce::Button
 public:
     GearButton();
     void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+};
+
+class PrintLaneButton final : public juce::Button
+{
+public:
+    PrintLaneButton();
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void enablementChanged() override { repaint(); }
 };
 
 class RecallImportPanel;
@@ -73,7 +85,8 @@ private:
     std::array<std::unique_ptr<juce::ParameterAttachment>, 32> padA;
 };
 
-class PcfEditor final : public juce::AudioProcessorEditor
+class PcfEditor final : public juce::AudioProcessorEditor,
+                        private juce::Timer
 {
 public:
     explicit PcfEditor (PcfProcessor&);
@@ -83,11 +96,13 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
     void setupKnob (juce::Slider& s);
     void setupPattern();
     void setupModeButtons (PcfProcessor& p);
     void setSeqOpen (bool open);
     void setImportOpen (bool open);
+    void syncPrintButton();
 
     PcfProcessor& owner;
     PcfLookAndFeel lnf;
@@ -96,11 +111,14 @@ private:
     juce::ToggleButton lowPass { "Low-pass" }, bandPass { "Band-pass" };
     juce::Label title, freqN, resN, amountN, decayN, patternN, modeN;
     FoldArrow fold;
+    juce::ToggleButton enableBtn;
+    PrintLaneButton printBtn;
     GearButton gear;
     std::unique_ptr<SequencerStrip> seqStrip;
     std::unique_ptr<RecallImportPanel> importPanel;
 
     juce::AudioProcessorValueTreeState::SliderAttachment freqA, resA, amountA, decayA, patternA;
+    juce::AudioProcessorValueTreeState::ButtonAttachment enableA;
     std::unique_ptr<juce::ParameterAttachment> modeA;
     std::unique_ptr<juce::ParameterAttachment> seqEnableWatch;
     bool ignoreModeCallbacks = false;

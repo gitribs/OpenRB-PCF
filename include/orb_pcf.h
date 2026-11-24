@@ -21,6 +21,7 @@ typedef struct OrbPcfParams {
     uint8_t seq_length;
     uint8_t seq_resolution;
     uint8_t seq_steps[32];
+    uint8_t enabled;   /* 0|1, default 1; internal device on, not host bypass or seq_enable */
 } OrbPcfParams;
 
 typedef struct OrbPcfPlayhead {

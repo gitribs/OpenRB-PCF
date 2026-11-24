@@ -5,11 +5,29 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace
 {
 constexpr double kEngineRate = 44100.0;
 constexpr int kPcfBlock = 64;
+constexpr int kPrintPpq = 192;
+constexpr const char* kPrintIds[] = { "freq", "res", "amount", "pattern", "decay", "mode", "enabled" };
+constexpr int kPrintCount = (int) (sizeof kPrintIds / sizeof kPrintIds[0]);
+static_assert (kPrintCount == 7, "print ids must match PcfProcessor::kPrintParams");
+constexpr int kEnabledPrintIndex = 6;
+static_assert (sizeof (OrbPcfParams) == 43,
+               "OrbPcfParams ABI: 10 panel/seq bytes, 32 seq_steps, enabled last");
+
+int printIndexForId (const char* id)
+{
+    if (id == nullptr)
+        return -1;
+    for (int i = 0; i < kPrintCount; ++i)
+        if (std::strcmp (id, kPrintIds[i]) == 0)
+            return i;
+    return -1;
+}
 
 // Starting values for a newly inserted effect. Hosts restore project and preset
 // state through setStateInformation, which replaces these after construction.
@@ -53,7 +71,11 @@ PcfProcessor::PcfProcessor()
 {
 }
 
-PcfProcessor::~PcfProcessor() = default;
+PcfProcessor::~PcfProcessor()
+{
+    cancelPendingUpdate();
+    endPrintGestures();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout PcfProcessor::createLayout()
 {
@@ -70,6 +92,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PcfProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "pattern", 1 }, "Pattern", 0, 54, kDefaultPattern));
     p.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { "mode", 1 }, "Mode", juce::StringArray { "Low-pass", "Band-pass" }, 0));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "enabled", 1 }, "On", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "seq_enable", 1 }, "Seq Enable", false));
     p.push_back (std::make_unique<AudioParameterInt> (
         ParameterID { "seq_length", 1 }, "Seq Length", 1, 32, kDefaultSeqLength));
@@ -170,6 +193,7 @@ OrbPcfParams PcfProcessor::readParams (bool bypass) const
     params.pattern = (uint8_t) juce::jlimit (0, 54, asInt ("pattern", kDefaultPattern));
     params.mode = asInt ("mode", 0) == 0 ? 1 : 0;
     params.bypass = bypass ? 1 : 0;
+    params.enabled = (uint8_t) juce::jlimit (0, 1, asInt ("enabled", 1));
     params.seq_enable = asInt ("seq_enable", 0) != 0 ? 1 : 0;
     params.seq_length = (uint8_t) juce::jlimit (1, 32, asInt ("seq_length", kDefaultSeqLength));
     params.seq_resolution = kSeqResolutions[juce::jlimit (0, 2, asInt ("seq_res", 1))];
@@ -367,6 +391,7 @@ void PcfProcessor::engineToHost (float* left, float* right, int nHost, int nEngi
 
 void PcfProcessor::processBuffer (juce::AudioBuffer<float>& buffer, bool bypass)
 {
+    runPrintTake();
     juce::ScopedNoDenormals noDenormals;
 
     const int nHost = buffer.getNumSamples();
@@ -420,8 +445,350 @@ juce::String PcfProcessor::importRecall (const juce::String& text)
     const auto err = parseRecall (text, parsed);
     if (err.isNotEmpty())
         return err;
+
+    PcfPrint printed;
+    parsePrint (text, printed);
+
     applyRecall (apvts, parsed);
+
+    if (printed.events.empty())
+    {
+        clearPrintTake();
+        return {};
+    }
+
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        printEvents = std::move (printed.events);
+        printLoaded = true;
+    }
+    armPrint();
     return {};
+}
+
+std::vector<PcfPrintEvent> PcfProcessor::copyPrintEvents() const
+{
+    const juce::SpinLock::ScopedLockType sl (printLock);
+    return printEvents;
+}
+
+juce::RangedAudioParameter* PcfProcessor::printParam (int index) const
+{
+    if (index < 0 || index >= kPrintParams)
+        return nullptr;
+    return apvts.getParameter (kPrintIds[index]);
+}
+
+void PcfProcessor::endPrintGestures()
+{
+    for (int i = 0; i < kPrintParams; ++i)
+    {
+        if (! printGesturing[(size_t) i])
+            continue;
+        printGesturing[(size_t) i] = false;
+        if (auto* p = printParam (i))
+            p->endChangeGesture();
+    }
+}
+
+bool PcfProcessor::printValueAt (const std::vector<PcfPrintEvent>& events,
+                                 int index, int tick, int& value)
+{
+    if (index < 0 || index >= kPrintParams)
+        return false;
+    bool found = false;
+    for (const auto& e : events)
+    {
+        if (printIndexForId (e.id) != index || e.tick > tick)
+            continue;
+        found = true;
+        value = e.value;
+    }
+    return found;
+}
+
+void PcfProcessor::setPrintParam (int index, int value)
+{
+    auto* p = printParam (index);
+    if (p == nullptr)
+        return;
+    p->setValueNotifyingHost (p->convertTo0to1 ((float) value));
+}
+
+void PcfProcessor::writePrintParam (int index, int value)
+{
+    beginPrintGesture (index);
+    setPrintParam (index, value);
+    if (index != kEnabledPrintIndex || ! printGesturing[(size_t) index])
+        return;
+    printGesturing[(size_t) index] = false;
+    if (auto* p = printParam (index))
+        p->endChangeGesture();
+}
+
+void PcfProcessor::beginPrintGesture (int index)
+{
+    if (index < 0 || index >= kPrintParams || printGesturing[(size_t) index])
+        return;
+    if (auto* p = printParam (index))
+    {
+        p->beginChangeGesture();
+        printGesturing[(size_t) index] = true;
+    }
+}
+
+void PcfProcessor::seedPrintOrigin()
+{
+    std::vector<PcfPrintEvent> events;
+    std::array<bool, kPrintParams> moving {};
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        events = printEvents;
+        moving = printMoving;
+    }
+
+    for (int i = 0; i < kPrintParams; ++i)
+    {
+        if (! moving[(size_t) i])
+            continue;
+        int value = 0;
+        const bool haveOrigin = printValueAt (events, i, 0, value);
+        if (i == kEnabledPrintIndex)
+        {
+            if (haveOrigin)
+                writePrintParam (i, value);
+            continue;
+        }
+        beginPrintGesture (i);
+        if (haveOrigin)
+            setPrintParam (i, value);
+    }
+}
+
+void PcfProcessor::armPrint()
+{
+    if (wrapperType == wrapperType_Standalone)
+        return;
+
+    endPrintGestures();
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        if (printEvents.empty())
+        {
+            printArmed = false;
+            printLoaded = false;
+            return;
+        }
+
+        printMoving.fill (false);
+        bool haveEnabled = false;
+        for (const auto& e : printEvents)
+        {
+            const int i = printIndexForId (e.id);
+            if (i < 0)
+                continue;
+            if (e.tick > 0)
+                printMoving[(size_t) i] = true;
+            if (i == kEnabledPrintIndex)
+                haveEnabled = true;
+        }
+        if (haveEnabled)
+            printMoving[(size_t) kEnabledPrintIndex] = true;
+        printPendingOn.fill (false);
+        printTakeActive = false;
+        printLastTick = 0;
+        havePrintPpq = false;
+        printStopPending = false;
+        printLoaded = true;
+    }
+
+    // Write tick-0 values while stopped so Latch/Write capture bar 1. Async updates
+    // during the take are stamped at the message-thread playhead and can miss the start.
+    seedPrintOrigin();
+
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        printArmed = true;
+    }
+}
+
+void PcfProcessor::disarmPrint()
+{
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        printArmed = false;
+        printTakeActive = false;
+        printStopPending = false;
+        printPendingOn.fill (false);
+    }
+    endPrintGestures();
+}
+
+void PcfProcessor::clearPrintTake()
+{
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        printArmed = false;
+        printTakeActive = false;
+        printStopPending = false;
+        printEvents.clear();
+        printMoving.fill (false);
+        printPendingOn.fill (false);
+        printLoaded = false;
+        havePrintPpq = false;
+        printLastTick = 0;
+    }
+    endPrintGestures();
+}
+
+bool PcfProcessor::setPrintArmed (bool on)
+{
+    if (wrapperType == wrapperType_Standalone)
+        return false;
+    if (on)
+        armPrint();
+    else
+        disarmPrint();
+    return isPrintArmed();
+}
+
+void PcfProcessor::queuePrintValue (int index, int value)
+{
+    if (index < 0 || index >= kPrintParams)
+        return;
+    printPending[(size_t) index] = value;
+    printPendingOn[(size_t) index] = true;
+}
+
+void PcfProcessor::chasePrintAt (int tick)
+{
+    for (int i = 0; i < kPrintParams; ++i)
+    {
+        if (! printMoving[(size_t) i])
+            continue;
+        int value = 0;
+        if (printValueAt (printEvents, i, tick, value))
+            queuePrintValue (i, value);
+    }
+}
+
+void PcfProcessor::emitPrintRange (int fromTick, int toTick)
+{
+    for (const auto& e : printEvents)
+    {
+        if (e.tick <= fromTick || e.tick > toTick)
+            continue;
+        const int index = printIndexForId (e.id);
+        if (index >= 0 && printMoving[(size_t) index])
+            queuePrintValue (index, e.value);
+    }
+}
+
+void PcfProcessor::runPrintTake()
+{
+    if (wrapperType == wrapperType_Standalone || ! printArmed.load())
+        return;
+
+    bool hostPlaying = false;
+    bool hasPpq = false;
+    double ppq = 0.0;
+    if (auto* ph = getPlayHead())
+    {
+        if (auto info = ph->getPosition())
+        {
+            hostPlaying = info->getIsPlaying() || info->getIsRecording();
+            if (const auto pos = info->getPpqPosition(); pos.hasValue() && std::isfinite (*pos))
+            {
+                ppq = *pos;
+                hasPpq = true;
+            }
+        }
+    }
+
+    bool notify = false;
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        if (! printArmed.load())
+            return;
+
+        if (hasPpq && havePrintPpq && std::abs (ppq - printLastPpq) > 1.0e-9)
+            hostPlaying = true;
+        if (hasPpq)
+        {
+            printLastPpq = ppq;
+            havePrintPpq = true;
+        }
+
+        if (! hostPlaying)
+        {
+            if (printTakeActive)
+            {
+                printTakeActive = false;
+                printArmed = false;
+                printStopPending = true;
+                notify = true;
+            }
+        }
+        else if (hasPpq)
+        {
+            const int tick = (int) std::llround (ppq * (double) kPrintPpq);
+            if (! printTakeActive || tick < printLastTick)
+                chasePrintAt (tick);
+            else
+                emitPrintRange (printLastTick, tick);
+            printTakeActive = true;
+            printLastTick = tick;
+            for (bool on : printPendingOn)
+            {
+                if (on)
+                {
+                    notify = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (notify)
+        triggerAsyncUpdate();
+}
+
+void PcfProcessor::handleAsyncUpdate()
+{
+    std::array<int, kPrintParams> values {};
+    std::array<bool, kPrintParams> on {};
+    bool stop = false;
+    {
+        const juce::SpinLock::ScopedLockType sl (printLock);
+        values = printPending;
+        on = printPendingOn;
+        printPendingOn.fill (false);
+        stop = printStopPending.exchange (false);
+    }
+
+    for (int i = 0; i < kPrintParams; ++i)
+    {
+        if (! on[(size_t) i])
+            continue;
+        if (i == kEnabledPrintIndex)
+            writePrintParam (i, values[(size_t) i]);
+        else
+        {
+            beginPrintGesture (i);
+            setPrintParam (i, values[(size_t) i]);
+        }
+    }
+
+    if (stop)
+    {
+        {
+            const juce::SpinLock::ScopedLockType sl (printLock);
+            printPendingOn.fill (false);
+            printTakeActive = false;
+            printArmed = false;
+        }
+        endPrintGestures();
+    }
 }
 
 juce::AudioProcessorEditor* PcfProcessor::createEditor()

@@ -43,6 +43,8 @@ pub struct Params {
     pub seq_resolution: u8,
     /// Engine velocities for the 32 pad slots (0 / 60 / 120 from the UI).
     pub seq_steps: [u8; 32],
+    /// Internal device on (engine `ENABLED`). Independent of host `bypass` and `seq_enable`.
+    pub enabled: u8,
 }
 
 impl Default for Params {
@@ -60,6 +62,7 @@ impl Default for Params {
             seq_length: 16,
             seq_resolution: 16,
             seq_steps: [0; 32],
+            enabled: d[pcf::ENABLED],
         }
     }
 }
@@ -332,7 +335,8 @@ impl PcfStereo {
             inst.set_param(pcf::DECAY as u8, decay);
             inst.set_param(pcf::WAVE as u8, pattern);
             inst.set_param(pcf::MODE as u8, p.mode);
-            inst.set_param(pcf::ENABLED as u8, 1);
+            let enabled = if p.enabled != 0 { 1 } else { 0 };
+            inst.set_param(pcf::ENABLED as u8, enabled);
             inst.set_pattern_override(seq);
         }
     }

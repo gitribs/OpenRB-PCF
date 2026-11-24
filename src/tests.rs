@@ -18,7 +18,10 @@ fn apply(p: &mut Pcf, params: Params) {
     p.set_param(pcf::DECAY as u8, params.decay);
     p.set_param(pcf::WAVE as u8, params.pattern.min(PATTERN_MAX));
     p.set_param(pcf::MODE as u8, params.mode);
-    p.set_param(pcf::ENABLED as u8, 1);
+    p.set_param(
+        pcf::ENABLED as u8,
+        if params.enabled != 0 { 1 } else { 0 },
+    );
     p.set_pattern_override(seq_override(&params));
 }
 
@@ -428,4 +431,89 @@ fn seq_length_one_retriggers() {
         "length 1 must retrigger on the next 16th, {} vs first {first}",
         p.left().env
     );
+}
+
+/// Bypass is delayed dry. The engine counter does not advance while skipped.
+#[test]
+fn bypass_is_delayed_dry() {
+    let params = Params {
+        amount: 109,
+        frequency: 64,
+        bypass: 1,
+        enabled: 0,
+        ..Params::default()
+    };
+    let n = 2 * BLOCK;
+    let mut input_l = vec![0.0f32; n];
+    let mut input_r = vec![0.0f32; n];
+    for i in 0..n {
+        input_l[i] = (i as f32) * 0.001;
+        input_r[i] = -(i as f32) * 0.002;
+    }
+
+    let mut wrap_l = input_l.clone();
+    let mut wrap_r = input_r.clone();
+    let mut wrap = PcfStereo::new();
+    wrap.process(&mut wrap_l, &mut wrap_r, params, playing(0.0));
+
+    assert!(wrap_l[..BLOCK].iter().all(|&x| x == 0.0));
+    assert!(wrap_r[..BLOCK].iter().all(|&x| x == 0.0));
+    assert_eq!(&wrap_l[BLOCK..], &input_l[..BLOCK]);
+    assert_eq!(&wrap_r[BLOCK..], &input_r[..BLOCK]);
+    assert_eq!(wrap.left().counter, 0);
+    assert_eq!(
+        wrap.left().live[pcf::FREQUENCY],
+        pcf::DEFAULTS[pcf::FREQUENCY]
+    );
+    // Host bypass skips apply_params, so Enable is not written to the engine.
+    assert_eq!(wrap.left().live[pcf::ENABLED], pcf::DEFAULTS[pcf::ENABLED]);
+}
+
+/// Internal Enable off is delayed dry: the engine still runs and returns the bus unchanged.
+#[test]
+fn enabled_off_is_delayed_dry() {
+    let params = Params {
+        amount: 109,
+        frequency: 64,
+        bypass: 0,
+        enabled: 0,
+        ..Params::default()
+    };
+    let n = 2 * BLOCK;
+    let mut input_l = vec![0.0f32; n];
+    let mut input_r = vec![0.0f32; n];
+    for i in 0..n {
+        input_l[i] = (i as f32) * 0.001;
+        input_r[i] = -(i as f32) * 0.002;
+    }
+
+    let mut wrap_l = input_l.clone();
+    let mut wrap_r = input_r.clone();
+    let mut wrap = PcfStereo::new();
+    wrap.process(&mut wrap_l, &mut wrap_r, params, playing(0.0));
+
+    assert!(wrap_l[..BLOCK].iter().all(|&x| x == 0.0));
+    assert!(wrap_r[..BLOCK].iter().all(|&x| x == 0.0));
+    assert_eq!(&wrap_l[BLOCK..], &input_l[..BLOCK]);
+    assert_eq!(&wrap_r[BLOCK..], &input_r[..BLOCK]);
+    assert_eq!(wrap.left().live[pcf::ENABLED], 0);
+    assert_eq!(wrap.blocks_processed(), 2);
+}
+
+/// frequency .. seq_steps, then enabled — 43 bytes, enabled last.
+#[test]
+fn params_abi_enabled_is_last_byte() {
+    assert_eq!(std::mem::size_of::<Params>(), 43);
+    assert_eq!(std::mem::offset_of!(Params, frequency), 0);
+    assert_eq!(std::mem::offset_of!(Params, resonance), 1);
+    assert_eq!(std::mem::offset_of!(Params, amount), 2);
+    assert_eq!(std::mem::offset_of!(Params, decay), 3);
+    assert_eq!(std::mem::offset_of!(Params, pattern), 4);
+    assert_eq!(std::mem::offset_of!(Params, mode), 5);
+    assert_eq!(std::mem::offset_of!(Params, bypass), 6);
+    assert_eq!(std::mem::offset_of!(Params, seq_enable), 7);
+    assert_eq!(std::mem::offset_of!(Params, seq_length), 8);
+    assert_eq!(std::mem::offset_of!(Params, seq_resolution), 9);
+    assert_eq!(std::mem::offset_of!(Params, seq_steps), 10);
+    assert_eq!(std::mem::offset_of!(Params, enabled), 42);
 }

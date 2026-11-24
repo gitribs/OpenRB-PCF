@@ -2,12 +2,17 @@
 
 #include <JuceHeader.h>
 #include "orb_pcf.h"
+#include "RecallImport.h"
 
+#include <array>
+#include <atomic>
 #include <memory>
+#include <vector>
 
 class PcfEditor;
 
-class PcfProcessor final : public juce::AudioProcessor
+class PcfProcessor final : public juce::AudioProcessor,
+                           private juce::AsyncUpdater
 {
 public:
     PcfProcessor();
@@ -41,6 +46,11 @@ public:
     // empty = success; otherwise a short reason for the editor to show
     juce::String importRecall (const juce::String& text);
 
+    bool setPrintArmed (bool on);
+    bool isPrintArmed() const noexcept { return printArmed.load(); }
+    bool hasPrintTake() const noexcept { return printLoaded.load(); }
+    std::vector<PcfPrintEvent> copyPrintEvents() const;
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
@@ -48,6 +58,8 @@ private:
     {
         void operator() (OrbPcf* p) const noexcept { orb_pcf_free (p); }
     };
+
+    static constexpr int kPrintParams = 7;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void processBuffer (juce::AudioBuffer<float>& buffer, bool bypass);
@@ -60,6 +72,23 @@ private:
     int hostToEngine (const float* left, const float* right, int nHost);
     void engineToHost (float* left, float* right, int nHost, int nEngine);
     void shiftFifo (juce::AudioBuffer<float>& fifo, int& fill, int used);
+
+    void handleAsyncUpdate() override;
+    void armPrint();
+    void disarmPrint();
+    void clearPrintTake();
+    void endPrintGestures();
+    void runPrintTake();
+    void queuePrintValue (int index, int value);
+    void chasePrintAt (int tick);
+    void emitPrintRange (int fromTick, int toTick);
+    void setPrintParam (int index, int value);
+    void writePrintParam (int index, int value);
+    void beginPrintGesture (int index);
+    void seedPrintOrigin();
+    juce::RangedAudioParameter* printParam (int index) const;
+    static bool printValueAt (const std::vector<PcfPrintEvent>& events,
+                              int index, int tick, int& value);
 
     std::unique_ptr<OrbPcf, OrbPcfDeleter> pcf;
     double hostRate = 44100.0;
@@ -84,6 +113,20 @@ private:
     juce::int64 lastSamples = 0;
     bool sawTrustedPlay = false;
     bool latchedUntrustedPlay = false;
+
+    mutable juce::SpinLock printLock;
+    std::vector<PcfPrintEvent> printEvents;
+    std::array<bool, kPrintParams> printMoving {};
+    std::array<int, kPrintParams> printPending {};
+    std::array<bool, kPrintParams> printPendingOn {};
+    std::array<bool, kPrintParams> printGesturing {};
+    std::atomic<bool> printArmed { false };
+    std::atomic<bool> printStopPending { false };
+    std::atomic<bool> printLoaded { false };
+    bool printTakeActive = false;
+    bool havePrintPpq = false;
+    double printLastPpq = 0.0;
+    int printLastTick = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PcfProcessor)
 };

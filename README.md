@@ -59,11 +59,27 @@ one-time `notarytool store-credentials` setup. `--skip-build` packages the curre
 
 | Control    | Range        | Notes                          |
 |------------|--------------|--------------------------------|
+| ON         | off/on       | internal device on; default on. Off is dry through the engine |
 | Frequency  | 0..127       | cutoff base                    |
 | Resonance  | 0..127       | one of 8 table rows            |
 | Amount     | 0..127       | envelope height                |
 | Decay      | 0..127       | envelope decay                 |
 | Pattern    | 0..54        | 55 waves; lengths 2..32 steps  |
 | Mode       | LP / BP      | engine mode `1` is low-pass    |
+
+ON is left of Print, Print left of the gear (standalone hides Print, so ON sits left of the gear).
+Host Device On / bypass is separate: it skips DSP and keeps the 64-sample delayed-dry FIFO. Sequencer
+**Enabled** in the fold-out is sequencer on/off (`seq_enable`), not device ON.
+
+The gear imports a snapshot copied from Modloader (`openrb-pcf 1`). Paste still applies Frequency,
+Resonance, Amount, Decay, Pattern, Mode, and `enabled:` (0 or 1). Missing `enabled:` stays on so
+older clipboards still load. The sequencer is left as it is. When the clipboard also has
+`openrb-print 1`, PCF stores those events — including the `enabled` lane — and auto-arms Print (the
+stair-step control left of the gear). Arming writes bar-1 values immediately so Latch or Write
+capture the start. Set the PCF track to Latch or Write (not Touch), play from bar 1 once, then stop.
+Frequency / Resonance / Amount / Decay / Pattern / Mode that moved in the song become host
+automation; Enable is always printed and writes stepped On/Off. Static knobs stay at the snapshot.
+Host loop off during the take. Logic’s AU wrapper is the safer Logic path. Ableton Live is the host
+most likely to ignore plugin-originated gestures. Standalone has no Print control.
 
 At 44100 Hz the resamplers are bypassed, so the samples that reach `Pcf` are the host samples.
